@@ -3,7 +3,7 @@ data/interim/
 data/processed/
 data_init
 
-data/raw/*.txt
+
 data/interim/*.csv
 data/processed/*.csv
 
