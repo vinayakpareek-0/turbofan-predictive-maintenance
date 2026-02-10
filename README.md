@@ -329,7 +329,7 @@ This project establishes a strong baseline. Future improvements:
 
 ---
 
-**Author:** Vinayak Pareek
+**Author:** Vinayak Pareek 
 **Contact:** vpj162@gmail.com  
 **License:** MIT
 
