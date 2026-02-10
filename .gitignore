@@ -1,0 +1,24 @@
+# Data folders (Keep raw, ignore the rest)
+data/interim/
+data/processed/
+data_init
+
+data/raw/*.txt
+data/interim/*.csv
+data/processed/*.csv
+
+
+data_init/raw/*.txt
+data_init/interim/*.csv
+data_init/processed/*.csv
+# Python artifacts
+__pycache__/
+*.pyc
+
+# IDEs
+.vscode/
+.idea/
+.ipynb_checkpoints
+
+#rest
+init.py

@@ -1,0 +1,70 @@
+# Manual feature selections derived from your visual/statistical analysis
+features:
+  # Sensors remaining after ALL cleaning (Ready for engineering)
+  remaining_sensors:
+    FD001:
+      [
+        "s2",
+        "s3",
+        "s4",
+        "s7",
+        "s8",
+        "s9",
+        "s11",
+        "s12",
+        "s13",
+        "s14",
+        "s15",
+        "s17",
+        "s20",
+        "s21",
+      ]
+    FD002:
+      [
+        "s2",
+        "s3",
+        "s4",
+        "s7",
+        "s8",
+        "s9",
+        "s10",
+        "s11",
+        "s12",
+        "s13",
+        "s15",
+        "s16",
+        "s17",
+        "s20",
+        "s21",
+      ]
+    FD003:
+      [
+        "s2",
+        "s3",
+        "s4",
+        "s7",
+        "s8",
+        "s9",
+        "s11",
+        "s12",
+        "s13",
+        "s14",
+        "s15",
+        "s17",
+        "s20",
+        "s21",
+      ]
+    FD004:
+      ["s2", "s3", "s4", "s7", "s9", "s10", "s11", "s12", "s15", "s16", "s17"]
+
+# Settings for Target Engineering
+target:
+  clip_limits:
+    FD001: 130
+    FD002: 155
+    FD003: 130
+    FD004: 155
+
+# Parameters for Temporal Engineering
+engineering:
+  window_size: 10 # Example window for rolling features
