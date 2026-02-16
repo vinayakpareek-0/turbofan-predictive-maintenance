@@ -71,11 +71,9 @@ def main():
 
     # Final Summary
     summary_df = pd.DataFrame(all_results)
-    print("\n" + "="*45)
+    print("\n" + "."*10)
     print("         TURBOFAN PROJECT SUMMARY")
-    print("="*45)
     print(summary_df.to_string(index=False))
-    print("="*45)
 
 if __name__ == "__main__":
     main()

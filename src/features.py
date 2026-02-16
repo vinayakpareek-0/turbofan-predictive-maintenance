@@ -37,3 +37,28 @@ def run_feature_engineering(df, dataset_id):
         df = apply_rul_clipping(df, dataset_id)
         
     return df
+
+def create_sequences(df, window_size, feature_cols, target_col=None):
+    """
+    Transforms 2D dataframe into 3D sequences for Deep Learning.
+    Shape: (num_samples, window_size, num_features)
+    """
+    sequences = []
+    targets = []
+    
+    # Process each engine unit separately to avoid cross-engine sequences
+    for unit_id in df['unit_id'].unique():
+        unit_data = df[df['unit_id'] == unit_id]
+        
+        # We can only create a sequence if the engine has enough history
+        if len(unit_data) >= window_size:
+            data_array = unit_data[feature_cols].values
+            if target_col:
+                target_array = unit_data[target_col].values
+            
+            for i in range(len(unit_data) - window_size + 1):
+                sequences.append(data_array[i : i + window_size])
+                if target_col:
+                    targets.append(target_array[i + window_size - 1])
+                    
+    return np.array(sequences), np.array(targets) if target_col else np.array(sequences)

@@ -17,7 +17,7 @@ def get_model_params(dataset_id):
     if dataset_id in ['FD002', 'FD004']:
         params.update({'max_depth': 4, 'learning_rate': 0.03,'reg_alpha': 10,'reg_lambda':1, 'min_child_weight': 5})
     else:
-        params.update({'max_depth': 6, 'learning_rate': 0.03, 'reg_alpha': 10,'reg_lambda':10,  'min_child_weight': 1})
+        params.update({'max_depth': 6, 'learning_rate': 0.0, 'reg_alpha': 10,'reg_lambda':10,  'min_child_weight': 1})
         
     return params
 
