@@ -148,3 +148,127 @@ LSTM_CFG = {
 # Window = 20% of average engine life (min 30)
 WINDOW_SIZES = {ds: max(30, int(AVG_LIVES[ds] * 0.20)) for ds in AVG_LIVES}
 
+def run_xgb(datasets, interim_dir, config):
+    from src.modeling import train_model, evaluate_on_test
+    all_results = []
+
+    for ds in datasets:
+        print(f"\n{'='*45}")
+        print(f"  📦 Dataset: {ds}")
+        print(f"{'='*45}")
+
+        train_df = pd.read_csv(f"{interim_dir}/train_{ds}.csv")
+        test_df  = pd.read_csv(f"{interim_dir}/test_{ds}.csv")
+        y_truth  = pd.read_csv(f"{interim_dir}/RUL_{ds}.csv")['RUL'].values
+
+        train_proc, fitted_models = run_preprocessing_pipeline(train_df, ds, config, fitted_models=None)
+        test_proc, _              = run_preprocessing_pipeline(test_df,  ds, config, fitted_models=fitted_models)
+
+        train_final = run_feature_engineering(train_proc, ds)
+        test_final  = run_feature_engineering(test_proc,  ds)
+
+        drop_cols = ['unit_id', 'time', 'regime_id', 'RUL', 'RUL_clipped']
+        features  = [c for c in train_final.columns if c not in drop_cols]
+        print(f"  📊 Features: {len(features)}")
+
+        print(f"  🌲 Training XGBoost...")
+        model          = train_model(train_final[features], train_final['RUL_clipped'], ds)
+        rmse, score, _ = evaluate_on_test(model, test_final, y_truth, features)
+
+        all_results.append({'Dataset': ds, 'RMSE': round(rmse, 2), 'NASA Score': round(score, 2)})
+        print(f"  ✅ {ds} | RMSE: {rmse:.2f} | NASA Score: {score:.2f}")
+
+    return all_results
+
+def run_lstm(datasets, interim_dir, config, device):
+    all_results = []
+
+    print(f"\n📊 Smart Window Sizes:")
+    for ds in datasets:
+        cfg = LSTM_CFG[ds]
+        print(f"   {ds}: window={WINDOW_SIZES[ds]} | batch={cfg['batch']} | "
+              f"hidden={cfg['hidden']} | epochs={cfg['epochs']} | "
+              f"lr={cfg['lr']} | dropout={cfg['dropout']}")
+
+    for ds in datasets:
+        print(f"\n{'='*45}")
+        print(f"  📦 Dataset: {ds}")
+        print(f"{'='*45}")
+
+        cfg         = LSTM_CFG[ds]
+        window_size = WINDOW_SIZES[ds]
+
+        train_df = pd.read_csv(f"{interim_dir}/train_{ds}.csv")
+        test_df  = pd.read_csv(f"{interim_dir}/test_{ds}.csv")
+        y_truth  = pd.read_csv(f"{interim_dir}/RUL_{ds}.csv")['RUL'].values
+
+        train_proc, fitted_models = run_preprocessing_pipeline(train_df, ds, config, fitted_models=None)
+        test_proc, _              = run_preprocessing_pipeline(test_df,  ds, config, fitted_models=fitted_models)
+
+        train_final = run_feature_engineering(train_proc, ds)
+        test_final  = run_feature_engineering(test_proc,  ds)
+
+        drop_cols = ['unit_id', 'time', 'regime_id', 'RUL', 'RUL_clipped']
+        features  = [c for c in train_final.columns if c not in drop_cols]
+        print(f"  📊 Features: {len(features)} | Window: {window_size}")
+
+        print(f"  🔄 Generating sequences...")
+        X_train, y_train = prepare_lstm_data(train_final, window_size, features, 'RUL_clipped')
+        print(f"  ✅ X: {X_train.shape} | y: {y_train.shape}")
+
+        print(f"  🧠 Training LSTM on {device}...")
+        model = RUL_LSTM(
+            input_dim  = len(features),
+            hidden_dim = cfg['hidden'],
+            dropout    = cfg['dropout']
+        ).to(device)
+
+        model = train_model_dl(
+            X_train, y_train, model,
+            batch_size = cfg['batch'],
+            epochs     = cfg['epochs'],
+            lr         = cfg['lr']
+        )
+
+        rmse, score = evaluate_lstm(model, test_final, y_truth, features, window_size)
+
+        all_results.append({'Dataset': ds, 'RMSE': round(rmse, 2), 'NASA Score': round(score, 2)})
+        print(f"\n  ✅ {ds} | RMSE: {rmse:.2f} | NASA Score: {score:.2f}")
+
+    return all_results
+
+
+
+def main():
+    args        = parse_args()
+    config      = load_config()
+    datasets    = ['FD001', 'FD002', 'FD003', 'FD004']
+    raw_dir     = "data/raw"
+    interim_dir = "data/interim"
+    os.makedirs("data/processed", exist_ok=True)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    print(f"🚀 Step 1: Data Initialization")
+    print(f"   Model  : {args.model.upper()}")
+    print(f"   Device : {device}")
+    convert_all_raw_data(raw_dir, interim_dir)
+
+    print(f"\n🚀 Step 2: Running {args.model.upper()} Pipeline...")
+
+    if args.model == 'xgb':
+        results = run_xgb(datasets, interim_dir, config)
+    elif args.model == 'lstm':
+        results = run_lstm(datasets, interim_dir, config, device)
+
+    # Summary
+    summary_df = pd.DataFrame(results)
+    print("\n" + "="*45)
+    print(f"     TURBOFAN {args.model.upper()} SUMMARY")
+    print("="*45)
+    print(summary_df.to_string(index=False))
+    print("="*45)
+
+
+if __name__ == "__main__":
+    main()
