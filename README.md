@@ -18,7 +18,7 @@ This is the **Remaining Useful Life (RUL)** prediction problem, and it's harder 
 
 ---
 
-## 📊 **The Dataset: Four Levels of Hell**
+## **The Dataset: Four Levels of Hell**
 
 NASA's C-MAPSS dataset isn't one challenge—it's four progressively harder ones:
 
@@ -88,14 +88,14 @@ Result after filtering:
 
 ---
 
-## 🎯 **Phase 3: The Regime Problem (My Key Contribution)**
+## **Phase 3: The Regime Problem (My Key Contribution)**
 
 ### **Why Standard Normalization Fails**
 
 Here's what happens if you just use `StandardScaler` on FD002:
 
 ```python
-# ❌ WRONG APPROACH
+#  WRONG APPROACH
 scaler = StandardScaler()
 X_scaled = scaler.fit_transform(train_data)
 ```
@@ -114,7 +114,7 @@ train_data['regime'] = kmeans.fit_predict(train_data[['op_setting_1', 'op_settin
 **Step 2:** Normalize sensors **within each regime separately**:
 
 ```python
-# ✅ CORRECT APPROACH
+#  CORRECT APPROACH
 for regime in range(6):
     mask = train_data['regime'] == regime
     scaler = StandardScaler()
@@ -133,7 +133,7 @@ Before vs After normalization:
 
 ---
 
-## ⚙️ **Phase 4: Feature Engineering**
+## **Phase 4: Feature Engineering**
 
 Raw sensor readings are noisy. I built temporal features to extract the degradation signal:
 
@@ -167,10 +167,10 @@ I chose **XGBoost** as my primary model for several reasons:
 
 **Why XGBoost?**
 
-- ✅ Handles non-linear relationships (degradation isn't linear)
-- ✅ Built-in regularization prevents overfitting
-- ✅ Works great with engineered tabular features
-- ✅ Feature importance for interpretability
+- Handles non-linear relationships (degradation isn't linear)
+- Built-in regularization prevents overfitting
+- Works great with engineered tabular features
+- Feature importance for interpretability
 
 **Hyperparameter Tuning:**
 
@@ -210,14 +210,40 @@ where $d_i = \text{Predicted RUL} - \text{True RUL}$
 
 ---
 
-## 🏆 **Results**
+### **Phase 7: Deep Learning (LSTM)**
 
-| Dataset   | RMSE ↓ | NASA Score ↓ | What This Means                       |
-| --------- | ------ | ------------ | ------------------------------------- |
-| **FD001** | 19.88  | 1,397        | ✅ Excellent baseline performance     |
-| **FD002** | 26.86  | 9,583        | ✅ Strong (regime clustering worked!) |
-| **FD003** | 21.87  | 2,549        | ✅ Consistent with FD001              |
-| **FD004** | 29.59  | 14,355       | ✅ State-of-the-art range             |
+After establishing XGBoost as a strong baseline, I implemented a **sequence-based LSTM** to capture temporal degradation patterns directly from the sensor time-series.
+
+**Key design decisions:**
+
+- Dataset-specific window sizes (20% of avg engine life) instead of fixed 30 cycles
+- Larger hidden dimensions for complex datasets (FD002/FD004: 128 vs 64)
+- Custom **NASALoss** function used directly during training (not just evaluation)
+- Slower learning rate for multi-regime datasets (0.0005 vs 0.001)
+
+| Dataset   | XGB RMSE  | LSTM RMSE | XGB Score  | LSTM Score | Winner         |
+| --------- | --------- | --------- | ---------- | ---------- | -------------- |
+| **FD001** | 19.88     | **16.77** | 1,397      | **588**    | ✅ LSTM        |
+| **FD002** | **26.86** | 28.42     | **9,583**  | 22,613     | ✅ XGBoost     |
+| **FD003** | 21.87     | **14.66** | 2,549      | **384**    | ✅ LSTM        |
+| **FD004** | **29.59** | 25.91     | **14,355** | 10,547     | ✅ LSTM (RMSE) |
+
+**Why LSTM wins on FD001/FD003:**
+Single operating condition = smooth, continuous degradation curves. LSTM's ability to learn sequential patterns over 40+ cycles gives it a natural edge — it literally "watches" the engine deteriorate cycle by cycle.
+
+**Why XGBoost wins on FD002 (NASA Score):**
+FD002's 6 operating conditions create high-frequency oscillations that confuse the LSTM's memory gates. XGBoost with regime-normalized features handles this structural noise better. The LSTM sees a "jump" in sensor values and interprets it as degradation, when it's just an altitude change.
+
+## **Key insight:** The best model depends on the problem structure — temporal models excel when degradation is smooth and sequential, while tree-based models handle regime-switching noise more robustly.
+
+## **Results**
+
+| Dataset   | RMSE ↓ | NASA Score ↓ | What This Means                    |
+| --------- | ------ | ------------ | ---------------------------------- |
+| **FD001** | 19.88  | 1,397        | Excellent baseline performance     |
+| **FD002** | 26.86  | 9,583        | Strong (regime clustering worked!) |
+| **FD003** | 21.87  | 2,549        | Consistent with FD001              |
+| **FD004** | 29.59  | 14,355       | State-of-the-art range             |
 
 **Context:** Published research on C-MAPSS typically reports:
 
@@ -228,7 +254,7 @@ where $d_i = \text{Predicted RUL} - \text{True RUL}$
 
 ---
 
-## 📁 **Project Structure**
+## **Project Structure**
 
 ```
 ├── data/
@@ -313,7 +339,8 @@ This single command:
 
 This project establishes a strong baseline. Future improvements:
 
-- [ ] **LSTM/CNN models:** Compare deep learning vs XGBoost
+- [x] **LSTM models:** Implemented — LSTM outperforms XGBoost on FD001/FD003 and also FD004 (for visible smooth degradation)
+- [ ] **CNN/CNN-LSTM Hybrid:** Capture both local patterns and long-range dependencies
 - [ ] **Multi-horizon predictions:** Predict RUL at 10, 30, 50 cycles ahead
 - [ ] **Uncertainty quantification:** Prediction intervals for risk management
 - [ ] **Streamlit dashboard:** Upload sensor data → get instant RUL prediction
