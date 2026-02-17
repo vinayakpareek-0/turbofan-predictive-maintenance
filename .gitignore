@@ -22,4 +22,5 @@ __pycache__/
 
 #rest
 init.py
-06_trial_dl.ipynb
+src/06_trial_dl.ipynb
+main.ipynb
