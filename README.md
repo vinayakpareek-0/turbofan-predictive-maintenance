@@ -1,363 +1,318 @@
-# Turbofan Engine Predictive Maintenance: A Complete Journey
+# Turbofan Engine Predictive Maintenance
 
-### **From 20,000 Noisy Sensor Readings to a Production-Ready RUL Prediction System**
-
-> **TL;DR:** Built an end-to-end machine learning pipeline that predicts aircraft engine failure 30-50 cycles in advance, achieving state-of-the-art performance on NASA's C-MAPSS benchmark. The secret? Treating operational noise as a **clustering problem**, not a normalization problem.
-
-[![Final Results](plots/XGB_result_grid.png)](plots/XGB_result_grid.png)
+**End-to-end ML pipeline for aircraft engine RUL (Remaining Useful Life) prediction using NASA C-MAPSS dataset.**
 
 ---
 
-## **The Problem: When Will It Break?**
+## Problem Statement
 
-Imagine you're maintaining a fleet of commercial aircraft. Each engine costs $10M+ and every unplanned failure grounds a plane, costing airlines $150,000/day. But if you replace engines too early, you're throwing away millions in remaining useful life.
+Predict the remaining operational cycles of aircraft turbofan engines before failure using multivariate time-series sensor data. This enables proactive maintenance scheduling, reducing unplanned downtime while optimizing maintenance costs.
 
-**The question:** Given 21 sensor readings from an engine (temperature, pressure, vibration, etc.), can we predict exactly how many flight cycles it has left before failure?
-
-This is the **Remaining Useful Life (RUL)** prediction problem, and it's harder than it sounds.
-
----
-
-## **The Dataset: Four Levels of Hell**
-
-NASA's C-MAPSS dataset isn't one challenge—it's four progressively harder ones:
-
-| Dataset   | Operating Conditions | Fault Modes   | What Makes It Hard                         | My Approach             |
-| --------- | -------------------- | ------------- | ------------------------------------------ | ----------------------- |
-| **FD001** | 1 (Sea Level)        | 1 (HPC)       | Clean baseline                             | Standard pipeline       |
-| **FD002** | **6 (Variable)**     | 1 (HPC)       | **Regime noise drowns degradation signal** | **K-Means Clustering**  |
-| **FD003** | 1 (Sea Level)        | 2 (HPC + Fan) | Multiple failure modes                     | Robust features         |
-| **FD004** | **6 (Variable)**     | 2 (HPC + Fan) | **Everything at once**                     | Clustering + Deep trees |
-
-The real world doesn't give you clean, single-condition data. FD002 and FD004 simulate engines flying at different altitudes, speeds, and throttle settings—**the sensor values change massively even when the engine is perfectly healthy**.
+**Input:** 21 sensor readings per flight cycle  
+**Output:** Predicted remaining useful life (cycles until failure)  
+**Challenge:** Operational noise from varying flight conditions masks degradation signals
 
 ---
 
-## **Phase 1: Understanding the Raw Data**
+## Dataset: NASA C-MAPSS
 
-### **Step 1: What Does Failure Look Like?**
+Four sub-datasets with increasing complexity:
 
-First, I loaded all four datasets and plotted the raw sensor distributions:
+| Dataset | Engines (Train/Test) | Operating Conditions | Fault Modes | Complexity |
+| ------- | -------------------- | -------------------- | ----------- | ---------- |
+| FD001   | 100/100              | 1 (sea level)        | 1 (HPC)     | Baseline   |
+| FD002   | 260/259              | 6 (variable)         | 1 (HPC)     | High       |
+| FD003   | 100/100              | 1 (sea level)        | 2 (HPC+Fan) | Medium     |
+| FD004   | 248/249              | 6 (variable)         | 2 (HPC+Fan) | Very High  |
 
-![Raw Data Distributions](plots/cleaning_plots/Raw_data_Dist/FD001.png)
+**Key characteristics:**
 
-**Key observations:**
-
-- Some sensors (like `sensor_1`, `sensor_5`) are completely flat—zero information
-- Others show clear bimodal distributions (hint: those 6 operating conditions in FD002/FD004)
-- A few sensors have exponential tails (degradation signal!)
-
-### **Step 2: Watching Engines Die**
-
-I traced individual engines from birth to failure, plotting every sensor over time:
-
-![Clean Sensor Trajectories](plots/cleaning_plots/Clean_Trajectory_Sensors/FD001_all_sensors.png)
-
-**This is where it clicked:**
-
-- **FD001/FD003:** Beautiful, smooth degradation curves. You can literally see sensors drifting as the engine wears out.
-- **FD002/FD004:** Total chaos. The sensors oscillate wildly because the engine keeps switching flight regimes. Degradation is invisible.
-
-**The challenge:** How do you find a slow 5% degradation signal when operational noise creates 40% swings?
+- Training data: Run-to-failure trajectories
+- Test data: Truncated before failure (ground truth RUL provided separately)
+- 26 columns: unit_id, time, 3 operational settings, 21 sensors
 
 ---
 
-## **Phase 2: Cleaning (The Hard Part)**
+## Pipeline Overview
 
-### **Step 2.1: Killing the Noise**
-
-I wrote an intelligent sensor filter that removes useless features:
-
-**Rule 1 - Constant Sensors:**  
-If `std/mean < 0.00002` (FD001) or `< 0.00005` (FD003), drop it. These sensors don't change whether the engine is new or dying.
-
-**Rule 2 - Noisy Sensors:**  
-Calculate correlation between each sensor and normalized engine age (0 = new, 1 = dead):
-
-- If `|correlation| < 0.3` (FD001/FD003) → sensor is random noise
-- If `|correlation| < 0.15` (FD002/FD004) → sensor is just operational bouncing
-
-Result after filtering:
-
-![After Removing Low Variance](plots/cleaning_plots/After_Removing_Low_Variance_feat/FD002_all_sensors.png)
-
-**FD001:** Dropped 7 sensors (1, 5, 6, 10, 16, 18, 19)  
-**FD002:** Dropped 1 sensor (14)  
-**FD003:** Dropped 7 sensors (same as FD001)  
-**FD004:** Dropped 1 sensor (14)
-
----
-
-## **Phase 3: The Regime Problem (My Key Contribution)**
-
-### **Why Standard Normalization Fails**
-
-Here's what happens if you just use `StandardScaler` on FD002:
-
-```python
-#  WRONG APPROACH
-scaler = StandardScaler()
-X_scaled = scaler.fit_transform(train_data)
+```
+Raw Data (.txt)
+  → Data Cleaning (remove constant/noisy sensors)
+  → Regime Clustering (FD002/FD004 only)
+  → Feature Engineering (rolling stats, RUL clipping)
+  → Model Training (XGBoost / LSTM)
+  → Evaluation (RMSE + NASA Score)
+  → Deployment (FastAPI + Docker)
 ```
 
-**Problem:** An engine at 40,000 ft naturally runs hotter than one at sea level. Standard scaling sees the temperature difference and thinks _"This hot one must be closer to failure!"_ when actually it's just flying higher.
+---
 
-### **My Solution: Cluster First, Normalize Second**
+## Phase 1: Data Exploration
 
-**Step 1:** Use K-Means (k=6) on the 3 operational setting columns to identify flight regimes:
+### Raw Sensor Distributions
+
+![Raw Data](plots/cleaning_plots/Raw_data_Dist/FD001.png)
+
+Observations:
+
+- Flat sensors (1, 5, 10, 16, 18, 19) contain no information
+- Bimodal distributions in FD002/FD004 indicate multiple operating regimes
+- Some sensors show clear degradation trends (2, 3, 4, 7, 11, 15)
+
+### Sensor Trajectories Over Engine Life
+
+![Trajectories](plots/cleaning_plots/Clean_Trajectory_Sensors/FD001_all_sensors.png)
+
+**FD001/FD003:** Smooth degradation curves visible  
+**FD002/FD004:** High-frequency oscillations from regime switching
+
+---
+
+## Phase 2: Feature Selection
+
+### Statistical Filtering
+
+**Constant sensors** (coefficient of variation < threshold):
+
+- FD001/FD003: sensors 1, 5, 6, 10, 16, 18, 19
+- FD002/FD004: sensor 14 only
+
+**Correlation-based filtering** (|correlation with engine age| < threshold):
+
+- Removes sensors with no relationship to degradation
+- Adaptive thresholds: 0.3 (single condition), 0.15 (multi-condition)
+
+![After Filtering](plots/cleaning_plots/After_Removing_Low_Variance_feat/FD002_all_sensors.png)
+
+---
+
+## Phase 3: Regime-Aware Normalization
+
+**Problem:** Standard scaling fails on FD002/FD004 because operational changes (altitude, speed) create larger variance than degradation signals.
+
+**Solution:** K-Means clustering on operational settings, then normalize within each regime separately.
 
 ```python
+# Cluster identification
 kmeans = KMeans(n_clusters=6, random_state=42)
-train_data['regime'] = kmeans.fit_predict(train_data[['op_setting_1', 'op_setting_2', 'op_setting_3']])
-```
+train_data['regime'] = kmeans.fit_predict(train_data[operational_settings])
 
-**Step 2:** Normalize sensors **within each regime separately**:
-
-```python
-#  CORRECT APPROACH
+# Regime-specific scaling
 for regime in range(6):
     mask = train_data['regime'] == regime
     scaler = StandardScaler()
-    train_data.loc[mask, sensor_cols] = scaler.fit_transform(train_data.loc[mask, sensor_cols])
+    train_data.loc[mask, sensors] = scaler.fit_transform(train_data.loc[mask, sensors])
 ```
 
-Now a $500°C$ reading at altitude is compared only to other altitude readings, not to sea-level temperatures.
+**Critical:** K-Means and scalers fitted on training data only, then applied to test data.
 
-**Critical detail:** I save the K-Means centroids and 6 separate scalers from training, then apply them blindly to the test set (no peeking!).
-
-Before vs After normalization:
-
-![Post-Normalization Trajectories](plots/feature_plots/Post-Normalization-Dist/train_FD002_normalized_trajectory.png)
-
-**See the difference?** After regime-aware normalization, the degradation trends emerge from the noise.
+![Normalization Effect](plots/feature_plots/Post-Normalization-Dist/train_FD002_normalized_trajectory.png)
 
 ---
 
-## **Phase 4: Feature Engineering**
+## Phase 4: Feature Engineering
 
-Raw sensor readings are noisy. I built temporal features to extract the degradation signal:
+### Temporal Features
 
-### **Rolling Window Features**
-
-- **10-cycle moving average:** Smooths out sensor jitter
-- **10-cycle moving std:** Captures increasing variability near failure
-- **Delta features:** Change from previous cycle (velocity of degradation)
+- Rolling mean (10-cycle window)
+- Rolling standard deviation (10-cycle window)
+- Lag features (change from previous cycle)
 
 ![Rolling Features](plots/feature_plots/rolling_feature_visuals/FD001_all_sensors_rolling.png)
 
-### **Target Engineering: RUL Clipping**
+### Target Engineering: RUL Clipping
 
-Engines don't degrade linearly from Day 1. A brand-new engine and one at 50% life both look "healthy." I clipped the target:
+Engines in early life (new or recently serviced) don't exhibit degradation. Clipping prevents the model from distinguishing between "200 cycles remaining" vs "300 cycles remaining" when both are effectively "healthy."
 
 ```python
-# Don't make the model guess if it's 200 or 300 cycles remaining
-train_data['RUL'] = train_data['RUL'].clip(upper=125)  # FD001/FD003
-train_data['RUL'] = train_data['RUL'].clip(upper=150)  # FD002/FD004
+train_data['RUL_clipped'] = train_data['RUL'].clip(upper=125)  # FD001/FD003
+train_data['RUL_clipped'] = train_data['RUL'].clip(upper=150)  # FD002/FD004
 ```
 
-![Target Comparison](plots/feature_plots/target_engineering/FD001_target_comparison.png)
-
-**Why this works:** The model learns _"If healthy, predict 125. If degrading, predict the actual RUL."_ This matches reality better than forcing predictions for engines with 300+ cycles left.
+![Target Clipping](plots/feature_plots/target_engineering/FD001_target_comparison.png)
 
 ---
 
-## **Phase 5: Modeling (XGBoost)**
+## Phase 5: Modeling
 
-I chose **XGBoost** as my primary model for several reasons:
-
-**Why XGBoost?**
-
-- Handles non-linear relationships (degradation isn't linear)
-- Built-in regularization prevents overfitting
-- Works great with engineered tabular features
-- Feature importance for interpretability
-
-**Hyperparameter Tuning:**
+### XGBoost Configuration
 
 ```python
 params = {
-    'max_depth': 7,           # Deep enough for interactions
-    'learning_rate': 0.05,    # Slow and steady
-    'n_estimators': 500,      # Early stopping at ~300
-    'subsample': 0.8,         # Prevent overfitting
-    'colsample_bytree': 0.8,
+    'n_estimators': 250,
+    'max_depth': 6,  # 9 for FD002/FD004
+    'learning_rate': 0.05,
+    'subsample': 0.8,
+    'colsample_bytree': 0.7,
+    'reg_alpha': 10,
+    'reg_lambda': 10,
 }
 ```
 
-**Dataset-specific tweaks:**
+### LSTM Architecture
 
-- FD001/FD003: Standard params worked great
-- FD002/FD004: Increased `max_depth=9` to capture regime interactions
+- Dataset-specific window sizes (20% of average engine life)
+- Hidden dimensions: 64 (FD001/FD003), 128 (FD002/FD004)
+- Custom NASA asymmetric loss function during training
+- Dropout: 0.2 (single condition), 0.3 (multi-condition)
 
 ---
 
-## **Phase 6: Evaluation (The NASA Scoring Function)**
+## Phase 6: Results
 
-Standard RMSE treats early and late predictions equally. But in aviation, **late predictions kill people**.
+### XGBoost Performance
 
-NASA's asymmetric scoring function:
+| Dataset | RMSE  | NASA Score | Notes                       |
+| ------- | ----- | ---------- | --------------------------- |
+| FD001   | 19.88 | 1,397      | Baseline performance        |
+| FD002   | 26.86 | 9,583      | Regime clustering effective |
+| FD003   | 21.87 | 2,549      | Two fault modes handled     |
+| FD004   | 29.59 | 14,355     | Most complex dataset        |
+
+### LSTM Performance
+
+| Dataset | RMSE  | NASA Score | Comparison          |
+| ------- | ----- | ---------- | ------------------- |
+| FD001   | 16.77 | 588        | Better than XGBoost |
+| FD002   | 28.42 | 22,613     | Worse than XGBoost  |
+| FD003   | 14.66 | 384        | Better than XGBoost |
+| FD004   | 25.91 | 10,547     | Better than XGBoost |
+
+**Observations:**
+
+- LSTM performs better on single-condition datasets (smooth degradation)
+- XGBoost handles multi-regime noise more effectively (FD002)
+- Both models achieve competitive results compared to published benchmarks
+
+### NASA Scoring Function
 
 $$
 \text{Score} = \sum_{i=1}^{n} \begin{cases}
-e^{-d_i/13} - 1 & \text{if early} \\
-e^{d_i/10} - 1 & \text{if late}
+e^{-d_i/13} - 1 & \text{if } d_i < 0 \text{ (early)} \\
+e^{d_i/10} - 1 & \text{if } d_i \geq 0 \text{ (late)}
 \end{cases}
 $$
 
-where $d_i = \text{Predicted RUL} - \text{True RUL}$
-
-**Translation:** A 30-cycle late prediction is penalized **exponentially more** than a 30-cycle early prediction.
+where $d_i = \text{predicted} - \text{actual}$. Late predictions penalized exponentially more than early predictions.
 
 ---
 
-### **Phase 7: Deep Learning (LSTM)**
+## Phase 7: Deployment
 
-After establishing XGBoost as a strong baseline, I implemented a **sequence-based LSTM** to capture temporal degradation patterns directly from the sensor time-series.
+### FastAPI + Docker
 
-**Key design decisions:**
+XGBoost model deployed as REST API accepting multi-cycle sensor sequences.
 
-- Dataset-specific window sizes (20% of avg engine life) instead of fixed 30 cycles
-- Larger hidden dimensions for complex datasets (FD002/FD004: 128 vs 64)
-- Custom **NASALoss** function used directly during training (not just evaluation)
-- Slower learning rate for multi-regime datasets (0.0005 vs 0.001)
+**Endpoint:**
 
-| Dataset   | XGB RMSE  | LSTM RMSE | XGB Score  | LSTM Score | Winner         |
-| --------- | --------- | --------- | ---------- | ---------- | -------------- |
-| **FD001** | 19.88     | **16.77** | 1,397      | **588**    | ✅ LSTM        |
-| **FD002** | **26.86** | 28.42     | **9,583**  | 22,613     | ✅ XGBoost     |
-| **FD003** | 21.87     | **14.66** | 2,549      | **384**    | ✅ LSTM        |
-| **FD004** | **29.59** | 25.91     | **14,355** | 10,547     | ✅ LSTM (RMSE) |
+```
+POST /predict
+{
+  "dataset_id": "fd001",
+  "sequence": [
+    {"unit_id": 1, "time": 171, "s2": 0.23, ...},
+    ...
+    {"unit_id": 1, "time": 200, "s2": 0.89, ...}
+  ]
+}
+```
 
-**Why LSTM wins on FD001/FD003:**
-Single operating condition = smooth, continuous degradation curves. LSTM's ability to learn sequential patterns over 40+ cycles gives it a natural edge — it literally "watches" the engine deteriorate cycle by cycle.
+### Production Test Results
 
-**Why XGBoost wins on FD002 (NASA Score):**
-FD002's 6 operating conditions create high-frequency oscillations that confuse the LSTM's memory gates. XGBoost with regime-normalized features handles this structural noise better. The LSTM sees a "jump" in sensor values and interprets it as degradation, when it's just an altitude change.
+Testing on Engine Unit 1 from each test set:
 
-## **Key insight:** The best model depends on the problem structure — temporal models excel when degradation is smooth and sequential, while tree-based models handle regime-switching noise more robustly.
+| Dataset | Actual RUL | Predicted RUL | Error  | Status       |
+| ------- | ---------- | ------------- | ------ | ------------ |
+| FD001   | 112        | 113.11        | +1.11  | Accurate     |
+| FD002   | 18         | 1.34          | -16.66 | Conservative |
+| FD003   | 44         | 23.54         | -20.46 | Conservative |
+| FD004   | 22         | 26.47         | +4.47  | Accurate     |
 
-## **Results**
-
-| Dataset   | RMSE ↓ | NASA Score ↓ | What This Means                    |
-| --------- | ------ | ------------ | ---------------------------------- |
-| **FD001** | 19.88  | 1,397        | Excellent baseline performance     |
-| **FD002** | 26.86  | 9,583        | Strong (regime clustering worked!) |
-| **FD003** | 21.87  | 2,549        | Consistent with FD001              |
-| **FD004** | 29.59  | 14,355       | State-of-the-art range             |
-
-**Context:** Published research on C-MAPSS typically reports:
-
-- FD001: Score ~1,500 (I beat this)
-- FD004: Score ~15,000-20,000 (I'm in range)
-
-**Key Insight:** The regime-aware normalization reduced FD002's error by ~35% compared to naive scaling.
+**Note:** Negative errors (predicting earlier failure) are safer in aviation maintenance than positive errors (predicting later failure).
 
 ---
 
-## **Project Structure**
+## Project Structure
 
 ```
 ├── data/
-│   ├── raw/              # Original NASA .txt files
-│   ├── interim/          # Converted to CSV
-│   └── processed/        # Feature-engineered, regime-normalized
-│
-├── plots/                # Every visualization from the journey
-│   ├── cleaning_plots/
-│   ├── feature_plots/
-│   └── XGB_result_grid.png
-│
-├── src/                  # Modular pipeline (no spaghetti notebooks!)
-│   ├── dataloader.py     # CSV loading + column standardization
-│   ├── preprocessing.py  # K-Means clustering + regime scaling
-│   ├── features.py       # Rolling windows + RUL clipping
-│   └── modeling.py       # XGBoost training + NASA scoring
-│
+│   ├── raw/              # Original .txt files
+│   ├── interim/          # CSV conversions
+│   └── processed/        # Feature-engineered data
+├── src/
+│   ├── data_loader.py
+│   ├── preprocessing.py
+│   ├── features.py
+│   ├── modeling.py
+│   └── deep_learning.py
 ├── config/
-│   └── config.yaml       # All parameters (no hardcoding!)
-│
-├── main.py               # One-command execution
+│   └── config.yaml       # Feature lists, RUL limits, hyperparameters
+├── api/
+│   ├── main.py          # FastAPI server
+│   └── utils.py
+├── models/              # Trained .joblib files
+├── plots/               # Visualizations
+├── main.py              # Training pipeline
+├── Dockerfile
 └── requirements.txt
 ```
 
-**Design Philosophy:** Every step is modular, reproducible, and configurable. No magic numbers in code.
-
 ---
 
-## **How to Run**
+## Usage
 
-**Step 1: Install Dependencies**
+**Training:**
 
 ```bash
 pip install -r requirements.txt
+python main.py --model xgb   # or --model lstm
 ```
 
-**Step 2: Run the Full Pipeline**
+**Deployment:**
 
 ```bash
-python main.py
+docker build -t turbofan-api .
+docker run -p 8000:8000 turbofan-api
+python scripts/test_api.py
 ```
 
-This single command:
+**Configuration:**
+Edit `config/config.yaml` to modify:
 
-1. Loads raw NASA data
-2. Applies intelligent cleaning
-3. Clusters regimes (FD002/FD004)
-4. Engineers rolling features
-5. Trains 4 separate XGBoost models
-6. Saves predictions + prints scores
-
-**Optional:** Modify `config/config.yaml` to experiment with:
-
-- Different RUL clip values
+- Features to include/exclude per dataset
+- RUL clipping thresholds
 - Rolling window sizes
-- K-Means cluster counts
-- XGBoost hyperparameters
+- Model hyperparameters
 
 ---
 
-## **Key Takeaways (What I Learned)**
+## Key Findings
 
-1. **Domain knowledge > Fancy algorithms**  
-   Understanding that operational regimes create noise was more valuable than any hyperparameter tuning.
-
-2. **Visualize everything**  
-   I created 40+ plots during this project. The regime problem only became obvious after plotting raw vs normalized trajectories.
-
-3. **Feature engineering still matters**  
-   Even with XGBoost, manually crafted rolling features outperformed raw sensors.
-
-4. **Asymmetric loss functions are real**  
-   Optimizing RMSE ≠ minimizing business cost. The NASA score forced me to be conservative (predict early), which is correct for safety.
-
-5. **Test leakage is subtle**  
-   Fitting K-Means on train+test would leak information. I saved centroids from training and applied them to test.
+1. **Regime-aware normalization** reduced error by ~35% on multi-condition datasets compared to standard scaling
+2. **Feature engineering** (rolling statistics) improved performance over raw sensor inputs
+3. **RUL clipping** addressed the "healthy engine" prediction problem
+4. **Model selection matters:** LSTM for smooth degradation, XGBoost for noisy regimes
+5. **Asymmetric loss** naturally biases models toward conservative (early) predictions
 
 ---
 
-## **What's Next?**
+## Future Work
 
-This project establishes a strong baseline. Future improvements:
-
-- [x] **LSTM models:** Implemented — LSTM outperforms XGBoost on FD001/FD003 and also FD004 (for visible smooth degradation)
-- [ ] **CNN/CNN-LSTM Hybrid:** Capture both local patterns and long-range dependencies
-- [ ] **Multi-horizon predictions:** Predict RUL at 10, 30, 50 cycles ahead
-- [ ] **Uncertainty quantification:** Prediction intervals for risk management
-- [ ] **Streamlit dashboard:** Upload sensor data → get instant RUL prediction
-- [ ] **Model deployment:** Containerize with Docker, serve via FastAPI
+- CNN-LSTM hybrid architecture
+- Multi-horizon prediction (simultaneous 10/30/50 cycle forecasts)
+- Uncertainty quantification (prediction intervals)
+- Real-time streaming inference
+- Transfer learning across datasets
 
 ---
 
-## **Acknowledgments**
+## References
 
-- **NASA Ames Research Center** for the C-MAPSS dataset
-- Built with Python, Pandas, Scikit-Learn, XGBoost, Matplotlib
-- Inspired by research from Saxena et al. (2008) on damage propagation modeling
+- Saxena, A., & Goebel, K. (2008). Turbofan Engine Degradation Simulation Data Set. NASA Ames Prognostics Data Repository.
+- Dataset: [NASA C-MAPSS](https://ti.arc.nasa.gov/tech/dash/groups/pcoe/prognostic-data-repository/)
 
 ---
 
-**Author:** Vinayak Pareek
+**Author:** Vinayak Pareek  
 **Contact:** vinayakjoshipy@gmail.com  
 **License:** MIT
-
----
