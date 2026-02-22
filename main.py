@@ -2,6 +2,7 @@
 import os
 import sys
 import argparse
+import joblib
 import torch
 import torch.nn as nn
 import numpy as np
@@ -73,7 +74,7 @@ def prepare_lstm_data(df, window_size, feature_cols, target_col):
 
 
 def train_model_dl(X_train, y_train, model, batch_size=64, epochs=50, lr=0.001):
-    # ✅ Device fix: tensors follow model's device
+    # Device fix: tensors follow model's device
     device    = next(model.parameters()).device
     X_tensor  = torch.from_numpy(X_train).to(device)
     y_tensor  = torch.from_numpy(y_train).to(device)
@@ -99,7 +100,7 @@ def train_model_dl(X_train, y_train, model, batch_size=64, epochs=50, lr=0.001):
 
 
 def evaluate_lstm(model, test_df, y_truth, feature_cols, window_size):
-    # ✅ Device fix: input tensor follows model's device
+    #  Device fix: input tensor follows model's device
     device = next(model.parameters()).device
     model.eval()
     y_preds = []
@@ -144,7 +145,7 @@ def run_xgb(datasets, interim_dir, config):
 
     for ds in datasets:
         print(f"\n{'='*45}")
-        print(f"  📦 Dataset: {ds}")
+        print(f"   Dataset: {ds}")
         print(f"{'='*45}")
 
         train_df = pd.read_csv(f"{interim_dir}/train_{ds}.csv")
@@ -159,14 +160,31 @@ def run_xgb(datasets, interim_dir, config):
 
         drop_cols = ['unit_id', 'time', 'regime_id', 'RUL', 'RUL_clipped']
         features  = [c for c in train_final.columns if c not in drop_cols]
-        print(f"  📊 Features: {len(features)}")
+        print(f"  Features: {len(features)}")
 
-        print(f"  🌲 Training XGBoost...")
+        print(f"  Training XGBoost...")
         model          = train_model(train_final[features], train_final['RUL_clipped'], ds)
         rmse, score, _ = evaluate_on_test(model, test_final, y_truth, features)
 
         all_results.append({'Dataset': ds, 'RMSE': round(rmse, 2), 'NASA Score': round(score, 2)})
-        print(f"  ✅ {ds} | RMSE: {rmse:.2f} | NASA Score: {score:.2f}")
+        print(f"  {ds} | RMSE: {rmse:.2f} | NASA Score: {score:.2f}")
+        # NEW: Save the model for FD001 specifically (or whichever you want to deploy)
+        if ds == "FD001":
+            os.makedirs("models", exist_ok=True)
+            joblib.dump(model, "models/xgb_fd001.joblib")
+            print(f"   Model saved to models/xgb_fd001.joblib")
+        elif ds == "FD002":
+            os.makedirs("models", exist_ok=True)
+            joblib.dump(model, "models/xgb_fd002.joblib")
+            print(f"   Model saved to models/xgb_fd002.joblib")
+        elif ds == "FD003":
+            os.makedirs("models", exist_ok=True)
+            joblib.dump(model, "models/xgb_fd003.joblib")
+            print(f"   Model saved to models/xgb_fd003.joblib")
+        elif ds == "FD004":
+            os.makedirs("models", exist_ok=True)
+            joblib.dump(model, "models/xgb_fd004.joblib")
+            print(f"   Model saved to models/xgb_fd004.joblib")
 
     return all_results
 
@@ -200,13 +218,13 @@ def run_lstm(datasets, interim_dir, config, device):
 
         drop_cols = ['unit_id', 'time', 'regime_id', 'RUL', 'RUL_clipped']
         features  = [c for c in train_final.columns if c not in drop_cols]
-        print(f"  📊 Features: {len(features)} | Window: {window_size}")
+        print(f"   Features: {len(features)} | Window: {window_size}")
 
-        print(f"  🔄 Generating sequences...")
+        print(f"   Generating sequences...")
         X_train, y_train = prepare_lstm_data(train_final, window_size, features, 'RUL_clipped')
-        print(f"  ✅ X: {X_train.shape} | y: {y_train.shape}")
+        print(f"   X: {X_train.shape} | y: {y_train.shape}")
 
-        print(f"  🧠 Training LSTM on {device}...")
+        print(f"   Training LSTM on {device}...")
         model = RUL_LSTM(
             input_dim  = len(features),
             hidden_dim = cfg['hidden'],
@@ -223,7 +241,7 @@ def run_lstm(datasets, interim_dir, config, device):
         rmse, score = evaluate_lstm(model, test_final, y_truth, features, window_size)
 
         all_results.append({'Dataset': ds, 'RMSE': round(rmse, 2), 'NASA Score': round(score, 2)})
-        print(f"\n  ✅ {ds} | RMSE: {rmse:.2f} | NASA Score: {score:.2f}")
+        print(f"\n  {ds} | RMSE: {rmse:.2f} | NASA Score: {score:.2f}")
 
     return all_results
 
@@ -236,32 +254,36 @@ def main():
     raw_dir     = "data/raw"
     interim_dir = "data/interim"
     os.makedirs("data/processed", exist_ok=True)
+    os.makedirs("models", exist_ok=True) # Ensure model folder exists
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    print(f"🚀 Step 1: Data Initialization")
-    print(f"   Model  : {args.model.upper()}")
-    print(f"   Device : {device}")
+    print(f" Step 1: Data Initialization")
+    print(f"    Model  : {args.model.upper()}")
+    print(f"    Device : {device}")
     convert_all_raw_data(raw_dir, interim_dir)
 
-    print(f"\n🚀 Step 2: Running {args.model.upper()} Pipeline...")
+    print(f"\n Step 2: Running {args.model.upper()} Pipeline...")
 
+    # Unified logic: Choose the runner based on lowercase argument
     if args.model == 'xgb':
         results = run_xgb(datasets, interim_dir, config)
     elif args.model == 'lstm':
         results = run_lstm(datasets, interim_dir, config, device)
+    else:
+        print(" Error: Unsupported model type.")
+        return
 
-    # Summary
+    # Summary Display
     summary_df = pd.DataFrame(results)
-    print("\n" + "="*45)
-    print(f"     TURBOFAN {args.model.upper()} SUMMARY")
-    print("="*45)
+    print(f" TURBOFAN {args.model.upper()} SUMMARY")
     print(summary_df.to_string(index=False))
-    print("="*45)
+  
 
 
 if __name__ == "__main__":
     main()
+
 
 # Use and throw scores running:
 #   python main.py --model xgb
