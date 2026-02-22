@@ -1,26 +1,39 @@
-# Data folders (Keep raw, ignore the rest)
+# Data folders (Keep raw data, ignore generated/intermediate files)
 data/interim/
 data/processed/
-data_init
+data_init/
 
-
+# data file
 data/interim/*.csv
 data/processed/*.csv
-
-
 data_init/raw/*.txt
 data_init/interim/*.csv
 data_init/processed/*.csv
+
 # Python artifacts
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.env
+venv/
+env/
 
-# IDEs
+# ML Models & Weights (Large binaries)
+models/*.joblib
+models/*.pth
+models/*.pkl
+
+# IDEs & System Files
 .vscode/
 .idea/
-.ipynb_checkpoints
+.DS_Store
+Thumbs.db
 
-#rest
-init.py
+# Jupyter Notebooks 
+.ipynb_checkpoints
 src/06_trial_dl.ipynb
 main.ipynb
+
+# Specific file ignores
+init.py

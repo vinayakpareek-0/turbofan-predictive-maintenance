@@ -1,0 +1,22 @@
+# Ignore local data (we only want raw data if needed)
+
+data/interim/
+data/processed/
+
+# Ignore local environment
+
+venv/
+.env
+.vscode/
+
+# Ignore Python junk
+
+**pycache**/
+\*.pyc
+
+# Ignore the models folder if you are using volumes
+
+models/
+plots/
+notebooks/
+data_init/ \***pycache**
